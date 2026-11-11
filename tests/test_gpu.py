@@ -79,7 +79,7 @@ def offloaded(policy="belady", **options):
 
 
 def run_calls(models, offload, x, ref, calls=4, drop_cache=False):
-    base = torch.cuda.memory_allocated()
+    base = torch.cuda.memory_allocated() - offload.sched.used  # units may already be resident from earlier calls
     h2d = []
     with torch.inference_mode():
         for call in range(calls):
@@ -139,3 +139,22 @@ def test_implicit_calls_and_detach(reference):
         assert all(t.device.type == "cpu" for t in model.state_dict().values())
         assert not hasattr(model, "_hf_hook")
         assert type(model) is Stack
+
+
+def test_shrink_and_budget_changes_between_calls(reference):
+    x, ref = reference
+    models, offload = offloaded()
+    run_calls(models, offload, x, ref, calls=3)
+    full = offload.resident_bytes
+    base = torch.cuda.memory_allocated() - full
+    report = offload.shrink(5 * 32 * MIB)
+    assert offload.resident_bytes <= 5 * 32 * MIB and report["freed_bytes"] == full - offload.resident_bytes
+    assert abs(torch.cuda.memory_allocated() - base - offload.resident_bytes) <= 4 * MIB  # evicted weights left
+    offload.shrink(0)
+    assert offload.resident_bytes == 0 and abs(torch.cuda.memory_allocated() - base) <= 4 * MIB
+    offload.max_memory = (8 * 32 + 8) * MIB  # a smaller budget for the next calls
+    run_calls(models, offload, x, ref, calls=2)
+    assert offload.resident_bytes <= 8 * 32 * MIB
+    offload.max_memory = (14 * 32 + 8) * MIB
+    run_calls(models, offload, x, ref, calls=2)
+    offload.detach()

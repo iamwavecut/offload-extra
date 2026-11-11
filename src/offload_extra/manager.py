@@ -278,7 +278,7 @@ class PartialOffload:
         every observed peak."""
         self._foreign = max(0, torch.cuda.memory_allocated(self.device) - self.sched.used)
         if self.max_memory is not None:
-            self.sched.capacity = int(self.max_memory) - self.margin
+            self.sched.capacity = int(self.max_memory) - self._foreign - self.margin
             return
         free, total = torch.cuda.mem_get_info(self.device)
         outside = total - free - torch.cuda.memory_reserved(self.device)
@@ -422,6 +422,27 @@ class PartialOffload:
             module._apply(lambda tensor: tensor, recurse=False)
 
     # ---- control -----------------------------------------------------------------------------------------------
+    @property
+    def resident_bytes(self) -> int:
+        """Bytes of weights on the device now."""
+        return self.sched.used
+
+    def shrink(self, max_resident: int = 0) -> dict:
+        """Between calls: evict units until at most ``max_resident`` bytes of weights stay on the device, then return
+        the freed memory to the driver. A process that shares the GPU calls this when another process needs memory;
+        the units that stay are the ones the next call uses first. ``max_memory`` may also change between calls: the
+        next call evicts down to it."""
+        if self._active and self._explicit:
+            raise RuntimeError("shrink() runs between calls, not inside offload.call()")
+        start = time.perf_counter()
+        self._finish_call()
+        before = self.sched.used
+        for victim in self.sched.shrink(int(max_resident)):
+            self._evict(self.units[victim])
+        torch.cuda.empty_cache()
+        return {"freed_bytes": before - self.sched.used, "resident_bytes": self.sched.used,
+                "seconds": round(time.perf_counter() - start, 4)}
+
     def offload_all(self) -> None:
         """Evict every unit and free the cached device memory (for example before another process needs it)."""
         self._finish_call()
@@ -466,6 +487,7 @@ class PartialOffload:
             stages[stage] = row
         out = {"policy": self.sched.policy, "signature": self.sched.signature,
                "capacity_gib": round(self.sched.capacity / GIB, 2),
+               "resident_gib": round(self.sched.used / GIB, 2),
                "h2d_gib": round(sum(s["h2d_gib"] for s in stages.values()), 3),
                "overcommits": self.sched.overcommits, "trace_len": len(self.sched.trace), "stages": stages}
         if self.timing:

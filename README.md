@@ -14,7 +14,7 @@ On an RTX 4060 Ti 16 GB, a 2048×2048 MiniMax-H3-Image (24.8 GiB of weights) tak
 whole-model offload, and Sana 1600M on a simulated 8 GiB card takes 5.7 s instead of 9.0 s with Diffusers model or
 group offload, with identical pixels. See [Results](#results).
 
-Status: 0.1.0, experimental. Not affiliated with Hugging Face.
+Status: 0.2.0, experimental. Not affiliated with Hugging Face.
 
 ## Install
 
@@ -147,6 +147,22 @@ The option changes a process-wide allocator setting through a private PyTorch fu
 `offload.last_call` reports the latest call; `offload.describe()` lists the units; `offload.offload_all()` evicts
 everything; `offload.detach()` (or `offload_extra.disable(pipe)`) restores the models.
 
+## Sharing the GPU with other processes
+
+Between calls the weights stay resident. A process that shares the GPU can take memory back and change the budget:
+
+```python
+offload.resident_bytes                 # bytes of weights on the device now
+offload.shrink(4 << 30)                # keep at most 4 GiB of weights, return the rest to the driver
+offload.max_memory = 6 << 30           # the next calls stay within 6 GiB of weights and activations
+```
+
+`shrink()` evicts the units whose first use in the next call comes last, then calls `torch.cuda.empty_cache()`.
+`max_memory` limits the scheduler's accounting, not PyTorch's cache: blocks that the caching allocator keeps after
+evictions can make the process use up to about 1 GiB more than `max_memory`. For a hard limit, also call
+`torch.cuda.set_per_process_memory_fraction(max_memory / total_memory)`; the allocator then returns cached blocks
+before it grows past the limit.
+
 ## Troubleshooting
 
 - **CUDA out of memory inside a stage.** Raise `margin` or `min_reserve`, or set `max_memory` lower. Check that
@@ -154,6 +170,9 @@ everything; `offload.detach()` (or `offload_extra.disable(pipe)`) restores the m
 - **No speed-up.** Read `offload.last_call`. If `h2d_gib` stays at the size of all weights, the call signature
   changes on every call, or the budget leaves no room for resident blocks. Read `offload.describe()`: a component
   with a large `rest_gib` or a single huge unit needs explicit `units=` in `add_model`.
+- **A slower stage after an out-of-memory error.** On Krea 2 Turbo, an out-of-memory error inside the VAE decoder
+  left every later decode in the same process 8.7 times slower (0.73 s to 6.4 s) with other pixels. Restart the
+  process after an out-of-memory error during a forward pass.
 - **"Expected all tensors to be on the same device".** The model's code creates tensors on the device of
   `next(model.parameters())`, which can be the CPU, or it reads a unit's weights outside the unit's forward. Create
   such tensors on the execution device, or pass `units=` so that the weights belong to the remainder.

@@ -130,6 +130,18 @@ class Scheduler:
         self.pins.clear()
         return victims
 
+    def shrink(self, target: int) -> list[str]:
+        """Evict unpinned units in the policy's order until at most ``target`` bytes stay resident. Between calls the
+        cursor is at the start of the trace, so Belady evicts the unit whose first use in the next call comes last."""
+        victims = []
+        while self.used > target:
+            victim = self._victim(keep=None)
+            if victim is None:
+                break
+            self._drop(victim)
+            victims.append(victim)
+        return victims
+
     # ---- reserve -----------------------------------------------------------------------------------------------
     def reserve(self, stage: str | None = None) -> int:
         stage = stage or self.stage

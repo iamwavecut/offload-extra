@@ -90,3 +90,19 @@ def test_pinned_units_are_never_victims():
     s.unpin("a")
     hit, victims = s.access("c")
     assert victims == ["a", "b"]  # LRU order on the first call, until c fits
+
+
+def test_shrink_evicts_the_latest_first_use_first():
+    s = Scheduler(100, min_reserve=0, reserve_margin=0)
+    for unit in "abcd":
+        s.add_unit(unit, 10, "x")
+    s.begin_call()
+    s.begin_stage("x")
+    for unit in "abcdbc":
+        s.access(unit)
+    s.end_call()
+    s.pin("a")
+    assert s.shrink(15) == ["d", "c", "b"]  # first uses in the next call: a 0, b 1, c 2, d 3; a is pinned
+    assert s.used == 10 and list(s.resident) == ["a"]
+    s.unpin("a")
+    assert s.shrink(0) == ["a"] and s.used == 0
