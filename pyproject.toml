@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "offload-extra"
+version = "0.1.0"
+description = "Partial weight offload for multi-component Diffusers and Transformers models: keep blocks on the GPU, load only what is missing, evict by Belady's rule"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "WaveCut" }]
+keywords = ["offload", "diffusers", "transformers", "vram", "belady", "pytorch"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "accelerate>=0.30",
+  "safetensors>=0.4",
+  "torch>=2.4",
+]
+
+[project.optional-dependencies]
+hf = ["diffusers>=0.32", "transformers>=4.48"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.urls]
+Homepage = "https://github.com/iamwavecut/offload-extra"
+Repository = "https://github.com/iamwavecut/offload-extra"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/offload_extra"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["gpu: needs a CUDA device", "hub: downloads tiny test models from the Hugging Face Hub"]
