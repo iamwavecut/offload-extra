@@ -12,7 +12,7 @@ by Belady's rule over the trace of the previous call.
 
 from importlib import import_module
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 _EXPORTS = {
     "PartialOffload": "manager", "Scheduler": "scheduler", "attach": "pipeline", "call_signature": "pipeline",
     "disable": "pipeline", "discover_units": "units", "drop_page_cache": "host", "enable": "pipeline",

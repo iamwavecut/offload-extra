@@ -26,6 +26,7 @@ from collections.abc import Hashable
 
 INF = float("inf")
 POLICIES = ("belady", "lru")
+FORECASTS = 8  # recorded traces kept per scheduler, one per distinct set of units
 
 
 class Scheduler:
@@ -45,6 +46,8 @@ class Scheduler:
         self.pins: Counter[str] = Counter()
         self.prev: list[str] = []
         self.positions: dict[str, list[int]] = {}
+        self.forecasts: OrderedDict[frozenset, list[str]] = OrderedDict()  # latest last
+        self.missed: set[str] = set()  # units this call used outside the forecast
         self.trace: list[str] = []
         self.cursor = 0
         self.learned: dict[tuple, int] = {}
@@ -66,18 +69,39 @@ class Scheduler:
         self.signature = signature
         self.trace = []
         self.cursor = 0
+        self.missed = set()
         self.stats = {}
         self.overcommits = 0
 
     def end_call(self) -> None:
         """Keep this call's trace as the forecast of the next call."""
         if self.trace:
-            self.prev = self.trace
-            self.positions = {}
-            for index, unit in enumerate(self.prev):
-                self.positions.setdefault(unit, []).append(index)
+            key = frozenset(self.trace)
+            self.forecasts.pop(key, None)
+            self.forecasts[key] = self.trace
+            while len(self.forecasts) > FORECASTS:
+                self.forecasts.popitem(last=False)
+            self._set_forecast(self.trace)
         self.trace = []
         self.cursor = 0
+        self.missed = set()
+
+    def _set_forecast(self, trace: list[str]) -> None:
+        self.prev = trace
+        self.positions = {}
+        for index, unit in enumerate(trace):
+            self.positions.setdefault(unit, []).append(index)
+
+    def _switch_forecast(self, unit: str) -> list[int] | None:
+        """The forecast does not contain ``unit``: take the latest recorded trace that does."""
+        for key, trace in reversed(self.forecasts.items()):
+            if unit in key and trace is not self.prev:
+                self._set_forecast(trace)
+                self.cursor = 0
+                self.missed = {u for u in self.missed if u not in self.positions}
+                return self.positions[unit]
+        self.missed.add(unit)
+        return None
 
     def begin_stage(self, stage: str) -> list[str]:
         """Enter ``stage``; returns the units to evict so that the stage's reserve fits."""
@@ -90,6 +114,8 @@ class Scheduler:
         the unit. The unit counts as resident from here on."""
         self.trace.append(unit)
         positions = self.positions.get(unit)
+        if not positions and self.prev and self.policy == "belady":
+            positions = self._switch_forecast(unit)
         if positions:
             index = bisect.bisect_left(positions, self.cursor)
             if index < len(positions):
@@ -173,7 +199,14 @@ class Scheduler:
             return None
         if self.policy == "lru" or not self.prev:
             return candidates[0]
-        return max(candidates, key=lambda u: (self.next_use(u), self.size[u]))
+        return max(candidates, key=self._rank)
+
+    def _rank(self, unit: str) -> tuple:
+        """The victim has the largest rank: a forecast unit with the furthest next use; the units this call used
+        outside the forecast come last, in LRU order (``max`` returns the first of equal ranks)."""
+        if unit in self.missed:
+            return (0, 0, 0)
+        return (1, self.next_use(unit), self.size[unit])
 
     def _make_room(self, extra: int, keep) -> list[str]:
         budget = self.capacity - self.reserve()

@@ -106,3 +106,37 @@ def test_shrink_evicts_the_latest_first_use_first():
     assert s.used == 10 and list(s.resident) == ["a"]
     s.unpin("a")
     assert s.shrink(0) == ["a"] and s.used == 0
+
+
+def mixed_calls(kinds):
+    """Two kinds of calls on one scheduler: a shared text encoder ``t``, then three passes over the call's own
+    blocks (``a`` or ``b``). The budget holds ``t`` and the four blocks of one kind."""
+    s = Scheduler(50, min_reserve=0, reserve_margin=0)
+    s.add_unit("t", 10, "te")
+    for kind in "ab":
+        for i in range(4):
+            s.add_unit(f"{kind}{i}", 10, "dit")
+    s.learned[(None, "te")] = s.learned[(None, "dit")] = 0
+    loads = []
+    for kind in kinds:
+        s.begin_call(None)
+        s.begin_stage("te")
+        s.access("t")
+        s.begin_stage("dit")
+        for _ in range(3):
+            for i in range(4):
+                s.access(f"{kind}{i}")
+        loads.append(sum(st["h2d_bytes"] for st in s.stats.values()))
+        s.end_call()
+    return loads
+
+
+def test_a_call_of_another_kind_keeps_its_own_blocks():
+    # The first b call has no trace with b blocks: they are kept and the a blocks leave. The later calls switch to
+    # the latest trace of their kind. A stale forecast would rank the b blocks as never used again and load each
+    # of them on every pass (120).
+    assert mixed_calls("abab") == [50, 40, 50, 40]
+
+
+def test_a_matching_forecast_is_unchanged():
+    assert mixed_calls("aaa") == [50, 0, 0]

@@ -14,7 +14,7 @@ On an RTX 4060 Ti 16 GB, a 2048×2048 MiniMax-H3-Image (24.8 GiB of weights) tak
 whole-model offload, and Sana 1600M on a simulated 8 GiB card takes 5.7 s instead of 9.0 s with Diffusers model or
 group offload, with identical pixels. See [Results](#results).
 
-Status: 0.2.0, experimental. Not affiliated with Hugging Face.
+Status: 0.2.1, experimental. Not affiliated with Hugging Face.
 
 ## Install
 
@@ -109,6 +109,13 @@ embeddings), is the component's remainder. A unit loads right before its forward
 the unpinned resident unit with the furthest next use in that trace; a unit not used again in this call is ranked by
 its first use in the next call. The first call falls back to LRU. Plain LRU is available as `policy="lru"` for
 comparison: on a pipeline whose call cycle does not fit in VRAM it evicts every block before its reuse.
+
+One manager can serve calls of different kinds, for example a text-to-image and an edit transformer that share a
+text encoder. The scheduler keeps the last eight traces with distinct unit sets. When a call uses a unit that the
+current forecast does not contain, the forecast switches to the latest trace that contains it. When no trace
+contains it, the units that this call used outside the forecast are evicted last, in LRU order. On a worker that
+serves text-to-image and edit calls of one model family, the first text-to-image call after an edit uploaded 405 GiB
+before this change and 5.9 GiB after it.
 
 **Budget.** The budget is total device memory minus memory outside PyTorch's allocator, minus tensors that are alive
 at the start of a call and are not ours (latents, a KV cache, other models), minus `margin` (1 GiB, for allocator
